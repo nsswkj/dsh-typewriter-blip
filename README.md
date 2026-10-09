@@ -3,6 +3,22 @@
 模型**回答**时逐字发出音效，音色可换，也可以自己调。
 进入对话时不发声，模型说完立刻停；窗口最小化、被挡住、或者切到别的标签页时**照常发声**。
 
+## 安装
+
+npm 包（预构建，装完不用编译）：
+
+```sh
+dsh plugin --profile desktop add dsh-typewriter-blip
+```
+
+插件市场（dshmarket）里搜**说话音效**，点一下安装也行。不想走 npm 就直接装仓库源码：
+
+```sh
+dsh plugin --profile desktop add github:nsswkj/dsh-typewriter-blip
+```
+
+三种方式装完都刷新一次 Harness 页面即可，无需重启。
+
 ## 用法
 
 1. 插件安装后（profile：`desktop`），刷新一次 Harness 页面。
@@ -97,6 +113,7 @@ src/client.js       输入框上方的按钮与面板（React）
 build.mjs           把 src/ 拼成单文件 client.js
 client.js           生成产物（浏览器模块图每个包只加载一个 ./client）
 test.mjs            离线测试台
+LICENSE             MIT
 ```
 
 ## 开发
