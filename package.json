@@ -9,6 +9,22 @@
     "description": "模型回答时逐字发出音效，窗口在后台也照常发声；音色可换，也可以自己调。"
   },
   "icon": "./icon.svg",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nsswkj/dsh-typewriter-blip.git"
+  },
+  "homepage": "https://github.com/nsswkj/dsh-typewriter-blip#readme",
+  "bugs": {
+    "url": "https://github.com/nsswkj/dsh-typewriter-blip/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "audio",
+    "web-audio"
+  ],
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
