@@ -5,19 +5,19 @@
 
 ## 安装
 
-npm 包（预构建，装完不用编译）：
-
-```sh
-dsh plugin --profile desktop add dsh-typewriter-blip
-```
-
-插件市场（dshmarket）里搜**说话音效**，点一下安装也行。不想走 npm 就直接装仓库源码：
+插件市场（dshmarket）里搜**说话音效**，点一下安装；或直接从仓库装源码：
 
 ```sh
 dsh plugin --profile desktop add github:nsswkj/dsh-typewriter-blip
 ```
 
-三种方式装完都刷新一次 Harness 页面即可，无需重启。
+npm 包还没发布。发布之后上面这条可以换成：
+
+```sh
+dsh plugin --profile desktop add dsh-typewriter-blip
+```
+
+装完刷新一次 Harness 页面即可，无需重启。
 
 ## 用法
 
