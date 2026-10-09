@@ -110,7 +110,7 @@ function ensureStyles(document) {
   if (typeof document === "undefined") return;
   if (document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`) !== null) return;
   const tag = document.createElement("style");
-  tag.dataset.plugin = "@local/dsh-typewriter-blip";
+  tag.dataset.plugin = "dsh-typewriter-blip";
   tag.dataset.pluginCss = STYLE_ID;
   tag.textContent = CSS;
   document.head.appendChild(tag);

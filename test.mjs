@@ -415,7 +415,7 @@ ok(
 );
 vm.runInThisContext(bundle, { filename: join(HERE, "client.js") });
 ok(loadCall !== null, "bundle registers itself through window.__ModuleLoader__.load");
-eq(loadCall.id, "@local/dsh-typewriter-blip", "module id is the package name");
+eq(loadCall.id, "dsh-typewriter-blip", "module id is the package name");
 eq(typeof loadCall.factory, "function", "bundle exposes a factory");
 ok(loadCall.factory.length >= 1, "factory declares the loader's require parameter");
 const contractPlugin = loadCall.factory(loaderRequire);

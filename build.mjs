@@ -25,7 +25,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const PACKAGE = "@local/dsh-typewriter-blip";
+const PACKAGE = "dsh-typewriter-blip";
 
 /** Load order; every entry declares its dependencies by module id. */
 const MODULES = [
