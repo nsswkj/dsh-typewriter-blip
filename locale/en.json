@@ -1,0 +1,4 @@
+{
+  "title": "Speech Blip",
+  "description": "Plays a blip for each character of the assistant's answer, in the background too; the voice is swappable and can be shaped by hand."
+}

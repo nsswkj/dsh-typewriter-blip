@@ -1,0 +1,38 @@
+{
+  "name": "@local/dsh-typewriter-blip",
+  "version": "1.1.7",
+  "private": true,
+  "type": "module",
+  "description": "Speech blips while the assistant answer streams — audible even when the window is in the background — with swappable and custom voices.",
+  "meta": {
+    "title": "说话音效 / Speech Blip",
+    "description": "模型回答时逐字发出音效，窗口在后台也照常发声；音色可换，也可以自己调。"
+  },
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "src/*.js",
+    "build.mjs",
+    "test.mjs",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "locale/*.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}

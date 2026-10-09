@@ -1,0 +1,3 @@
+- insert:
+    - id: typewriter-blip
+      name: '@local/dsh-typewriter-blip'
