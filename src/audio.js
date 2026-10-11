@@ -73,10 +73,30 @@ function specFor(settings) {
  * playing it and saying how long it lasts must not disagree.
  *
  * @param {object} settings
+ * @param {number} [semitones] this blip's extra offset (随机音高)
  * @returns {number} playback rate
  */
-function sampleRate(settings) {
-  return Math.max(0.25, Math.min(4, settings.rate * voices.shift(1, settings.pitch)));
+function sampleRate(settings, semitones = 0) {
+  return Math.max(0.25, Math.min(4, settings.rate * voices.shift(1, settings.pitch + semitones)));
+}
+
+/**
+ * This blip's random pitch offset, in semitones; `0` when 随机音高 is off.
+ *
+ * A synth bends its frequency by it. A decoded sample cannot be re-tuned, so the
+ * same semitone offset is applied as a playback rate instead — which is why
+ * 随机音高 used to do nothing for 自定义音频: only the synth path read it.
+ */
+function pitchJitter(settings) {
+  const amount = Number(settings.jitter) || 0;
+  return amount === 0 ? 0 : (Math.random() * 2 - 1) * amount;
+}
+
+/** This blip's random gain, around 1; `1` when 随机音量 is off. */
+function volumeScale(settings) {
+  const amount = Number(settings.volumeJitter) || 0;
+  if (amount === 0) return 1;
+  return Math.max(0, 1 + (Math.random() * 2 - 1) * amount);
 }
 
 class BlipAudio {
@@ -270,11 +290,12 @@ class BlipAudio {
     const kind = voices.characterClass(text);
     const offsets = spec.offsets ?? {};
     const offset = (kind === "space" ? 0 : offsets[kind] ?? 0) + settings.pitch;
-    const jitter = settings.jitter === 0 ? 0 : (Math.random() * 2 - 1) * settings.jitter;
+    const jitter = pitchJitter(settings);
     const frequency = Math.max(40, voices.shift(spec.freq ?? 520, offset + jitter));
     const duration = Math.max(0.012, (spec.duration ?? 0.05) * (1 - Math.min(0.45, Math.abs(offset + jitter) * 0.035)));
     const attack = Math.min(duration * 0.4, Math.max(0.001, spec.attack ?? 0.004));
-    const peak = 0.5;
+    // 随机音量 rides on top of the master gain: one blip at a time, never the mix.
+    const peak = Math.max(SILENCE, Math.min(1, 0.5 * volumeScale(settings)));
     const end = start + duration;
 
     const oscillator = context.createOscillator();
@@ -323,15 +344,18 @@ class BlipAudio {
     const settings = this.getSettings();
     const source = context.createBufferSource();
     source.buffer = this.sampleBuffer;
-    source.playbackRate.value = sampleRate(settings);
+    // 随机音高 for a file means resampling it: the same semitone offset the synth
+    // gets, as a playback rate.
+    source.playbackRate.value = sampleRate(settings, pitchJitter(settings));
     const rate = source.playbackRate.value;
     const full = (this.sampleBuffer.duration || 0.06) / rate;
     // One character may not turn into a whole track: cap the slice and fade it out.
     const duration = Math.min(full, MAX_SAMPLE_SECONDS);
+    const peak = Math.min(1, volumeScale(settings));
     const gain = context.createGain();
     gain.gain.setValueAtTime(SILENCE, start);
-    gain.gain.linearRampToValueAtTime(1, start + Math.min(0.002, duration * 0.2));
-    if (duration > 0.05) gain.gain.setValueAtTime(1, start + duration - 0.04);
+    gain.gain.linearRampToValueAtTime(peak, start + Math.min(0.002, duration * 0.2));
+    if (duration > 0.05) gain.gain.setValueAtTime(peak, start + duration - 0.04);
     gain.gain.linearRampToValueAtTime(SILENCE, start + duration);
     source.connect(gain);
     gain.connect(this.master);
@@ -357,7 +381,10 @@ class BlipAudio {
     const spec = specFor(settings);
     if (spec.kind === "sample") {
       if (this.sampleBuffer === null) return 0;
-      const full = (this.sampleBuffer.duration || 0.06) / sampleRate(settings);
+      // 试听 stays locked for the whole run, so it has to assume the longest blip
+      // the jitter can produce — that is the slowest playback rate it can pick.
+      const slowest = sampleRate(settings, -Math.abs(Number(settings.jitter) || 0));
+      const full = (this.sampleBuffer.duration || 0.06) / slowest;
       return Math.min(full, MAX_SAMPLE_SECONDS);
     }
     // #playSynth shortens a blip for offset characters, so spec.duration is a ceiling.

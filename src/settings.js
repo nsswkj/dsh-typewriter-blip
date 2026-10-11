@@ -16,6 +16,15 @@ const PRESET_IDS = ["soft", "click", "custom"];
 
 const WAVE_IDS = CUSTOM_WAVES.map((wave) => wave.id);
 
+/**
+ * Ceilings for the two random rows.
+ *
+ * Their sliders deliberately stop well short of these: the slider is for nudging
+ * a value, and the number field beside it is how anything larger is typed in.
+ */
+const JITTER_MAX = 24;
+const VOLUME_JITTER_MAX = 1;
+
 const DEFAULTS = Object.freeze({
   enabled: true,
   /**
@@ -31,8 +40,13 @@ const DEFAULTS = Object.freeze({
   volume: 0.32,
   /** Minimum spacing between two blips, milliseconds. */
   interval: 45,
-  /** Random pitch jitter per blip, semitones. */
+  /** Random pitch jitter per blip, semitones — `0` … `JITTER_MAX`. */
   jitter: 0.55,
+  /**
+   * Random volume per blip, as a fraction of `volume`: at `0.3` every blip lands
+   * between 70% and 130% of the slider's volume. `0` switches it off.
+   */
+  volumeJitter: 0,
   /** Skip the blips for spaces, tabs and newlines. */
   skipWhitespace: true,
   /**
@@ -93,7 +107,8 @@ function normalizeSettings(raw) {
     pitch: clampNumber(source.pitch, -12, 12, DEFAULTS.pitch),
     volume: clampNumber(source.volume, 0, 1, DEFAULTS.volume),
     interval: clampNumber(source.interval, 0, 400, DEFAULTS.interval),
-    jitter: clampNumber(source.jitter, 0, 3, DEFAULTS.jitter),
+    jitter: clampNumber(source.jitter, 0, JITTER_MAX, DEFAULTS.jitter),
+    volumeJitter: clampNumber(source.volumeJitter, 0, VOLUME_JITTER_MAX, DEFAULTS.volumeJitter),
     skipWhitespace: bool(source.skipWhitespace, DEFAULTS.skipWhitespace),
     answerOnly: bool(source.answerOnly, DEFAULTS.answerOnly),
     tail: clampNumber(source.tail, 0, 800, DEFAULTS.tail),
@@ -155,6 +170,8 @@ module.exports = {
   STORAGE_KEY,
   PRESET_IDS,
   WAVE_IDS,
+  JITTER_MAX,
+  VOLUME_JITTER_MAX,
   DEFAULTS,
   normalizeSettings,
   normalizeCustom,

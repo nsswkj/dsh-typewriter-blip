@@ -56,6 +56,15 @@ window.__ModuleLoader__.load({
 
         const WAVE_IDS = CUSTOM_WAVES.map((wave) => wave.id);
 
+        /**
+         * Ceilings for the two random rows.
+         *
+         * Their sliders deliberately stop well short of these: the slider is for nudging
+         * a value, and the number field beside it is how anything larger is typed in.
+         */
+        const JITTER_MAX = 24;
+        const VOLUME_JITTER_MAX = 1;
+
         const DEFAULTS = Object.freeze({
           enabled: true,
           /**
@@ -71,8 +80,13 @@ window.__ModuleLoader__.load({
           volume: 0.32,
           /** Minimum spacing between two blips, milliseconds. */
           interval: 45,
-          /** Random pitch jitter per blip, semitones. */
+          /** Random pitch jitter per blip, semitones — `0` … `JITTER_MAX`. */
           jitter: 0.55,
+          /**
+           * Random volume per blip, as a fraction of `volume`: at `0.3` every blip lands
+           * between 70% and 130% of the slider's volume. `0` switches it off.
+           */
+          volumeJitter: 0,
           /** Skip the blips for spaces, tabs and newlines. */
           skipWhitespace: true,
           /**
@@ -133,7 +147,8 @@ window.__ModuleLoader__.load({
             pitch: clampNumber(source.pitch, -12, 12, DEFAULTS.pitch),
             volume: clampNumber(source.volume, 0, 1, DEFAULTS.volume),
             interval: clampNumber(source.interval, 0, 400, DEFAULTS.interval),
-            jitter: clampNumber(source.jitter, 0, 3, DEFAULTS.jitter),
+            jitter: clampNumber(source.jitter, 0, JITTER_MAX, DEFAULTS.jitter),
+            volumeJitter: clampNumber(source.volumeJitter, 0, VOLUME_JITTER_MAX, DEFAULTS.volumeJitter),
             skipWhitespace: bool(source.skipWhitespace, DEFAULTS.skipWhitespace),
             answerOnly: bool(source.answerOnly, DEFAULTS.answerOnly),
             tail: clampNumber(source.tail, 0, 800, DEFAULTS.tail),
@@ -195,6 +210,8 @@ window.__ModuleLoader__.load({
           STORAGE_KEY,
           PRESET_IDS,
           WAVE_IDS,
+          JITTER_MAX,
+          VOLUME_JITTER_MAX,
           DEFAULTS,
           normalizeSettings,
           normalizeCustom,
@@ -397,10 +414,30 @@ window.__ModuleLoader__.load({
          * playing it and saying how long it lasts must not disagree.
          *
          * @param {object} settings
+         * @param {number} [semitones] this blip's extra offset (随机音高)
          * @returns {number} playback rate
          */
-        function sampleRate(settings) {
-          return Math.max(0.25, Math.min(4, settings.rate * voices.shift(1, settings.pitch)));
+        function sampleRate(settings, semitones = 0) {
+          return Math.max(0.25, Math.min(4, settings.rate * voices.shift(1, settings.pitch + semitones)));
+        }
+
+        /**
+         * This blip's random pitch offset, in semitones; `0` when 随机音高 is off.
+         *
+         * A synth bends its frequency by it. A decoded sample cannot be re-tuned, so the
+         * same semitone offset is applied as a playback rate instead — which is why
+         * 随机音高 used to do nothing for 自定义音频: only the synth path read it.
+         */
+        function pitchJitter(settings) {
+          const amount = Number(settings.jitter) || 0;
+          return amount === 0 ? 0 : (Math.random() * 2 - 1) * amount;
+        }
+
+        /** This blip's random gain, around 1; `1` when 随机音量 is off. */
+        function volumeScale(settings) {
+          const amount = Number(settings.volumeJitter) || 0;
+          if (amount === 0) return 1;
+          return Math.max(0, 1 + (Math.random() * 2 - 1) * amount);
         }
 
         class BlipAudio {
@@ -594,11 +631,12 @@ window.__ModuleLoader__.load({
             const kind = voices.characterClass(text);
             const offsets = spec.offsets ?? {};
             const offset = (kind === "space" ? 0 : offsets[kind] ?? 0) + settings.pitch;
-            const jitter = settings.jitter === 0 ? 0 : (Math.random() * 2 - 1) * settings.jitter;
+            const jitter = pitchJitter(settings);
             const frequency = Math.max(40, voices.shift(spec.freq ?? 520, offset + jitter));
             const duration = Math.max(0.012, (spec.duration ?? 0.05) * (1 - Math.min(0.45, Math.abs(offset + jitter) * 0.035)));
             const attack = Math.min(duration * 0.4, Math.max(0.001, spec.attack ?? 0.004));
-            const peak = 0.5;
+            // 随机音量 rides on top of the master gain: one blip at a time, never the mix.
+            const peak = Math.max(SILENCE, Math.min(1, 0.5 * volumeScale(settings)));
             const end = start + duration;
 
             const oscillator = context.createOscillator();
@@ -647,15 +685,18 @@ window.__ModuleLoader__.load({
             const settings = this.getSettings();
             const source = context.createBufferSource();
             source.buffer = this.sampleBuffer;
-            source.playbackRate.value = sampleRate(settings);
+            // 随机音高 for a file means resampling it: the same semitone offset the synth
+            // gets, as a playback rate.
+            source.playbackRate.value = sampleRate(settings, pitchJitter(settings));
             const rate = source.playbackRate.value;
             const full = (this.sampleBuffer.duration || 0.06) / rate;
             // One character may not turn into a whole track: cap the slice and fade it out.
             const duration = Math.min(full, MAX_SAMPLE_SECONDS);
+            const peak = Math.min(1, volumeScale(settings));
             const gain = context.createGain();
             gain.gain.setValueAtTime(SILENCE, start);
-            gain.gain.linearRampToValueAtTime(1, start + Math.min(0.002, duration * 0.2));
-            if (duration > 0.05) gain.gain.setValueAtTime(1, start + duration - 0.04);
+            gain.gain.linearRampToValueAtTime(peak, start + Math.min(0.002, duration * 0.2));
+            if (duration > 0.05) gain.gain.setValueAtTime(peak, start + duration - 0.04);
             gain.gain.linearRampToValueAtTime(SILENCE, start + duration);
             source.connect(gain);
             gain.connect(this.master);
@@ -681,7 +722,10 @@ window.__ModuleLoader__.load({
             const spec = specFor(settings);
             if (spec.kind === "sample") {
               if (this.sampleBuffer === null) return 0;
-              const full = (this.sampleBuffer.duration || 0.06) / sampleRate(settings);
+              // 试听 stays locked for the whole run, so it has to assume the longest blip
+              // the jitter can produce — that is the slowest playback rate it can pick.
+              const slowest = sampleRate(settings, -Math.abs(Number(settings.jitter) || 0));
+              const full = (this.sampleBuffer.duration || 0.06) / slowest;
               return Math.min(full, MAX_SAMPLE_SECONDS);
             }
             // #playSynth shortens a blip for offset characters, so spec.duration is a ceiling.
@@ -1413,7 +1457,7 @@ window.__ModuleLoader__.load({
         // static position (beside the button) for a frame before it jumps into place.
         const usePlacement = React.useLayoutEffect ?? React.useEffect;
 
-        const { SettingsStore } = settings;
+        const { SettingsStore, JITTER_MAX, VOLUME_JITTER_MAX } = settings;
         const { PRESETS, PRESET_ORDER, CUSTOM_WAVES } = voices;
         const { BlipAudio } = audio;
         const { BlipDriver, ChatTextObserver } = observer;
@@ -1465,6 +1509,15 @@ window.__ModuleLoader__.load({
          * from stuttering.
          */
         const BACKGROUND_LEAD_SECONDS = 1.4;
+        /**
+         * Where the two random rows' sliders stop.
+         *
+         * The slider is for nudging a value; the number field next to it takes anything up
+         * to the settings' own ceiling (`JITTER_MAX` / `VOLUME_JITTER_MAX`), which is the
+         * reason both exist on the same row.
+         */
+        const JITTER_SLIDER_MAX = 2;
+        const VOLUME_JITTER_SLIDER_MAX = 0.5;
 
         const CSS = `
         .twb-root{position:relative;display:inline-flex;align-items:center}
@@ -1494,6 +1547,11 @@ window.__ModuleLoader__.load({
         .twb-row-label{font-size:12px;color:var(--dsw-alias-label-secondary);flex:1}
         .twb-row-label[title]{cursor:help}
         .twb-value{font-size:11px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;min-width:40px;text-align:right}
+        .twb-field{display:inline-flex;align-items:center;gap:2px;flex:none}
+        .twb-number{width:42px;height:20px;box-sizing:border-box;padding:0 3px;border:0.5px solid var(--dsw-alias-border-l2);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;line-height:1;text-align:right;font-variant-numeric:tabular-nums}
+        .twb-number:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .twb-number:focus{outline:none;border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}
+        .twb-unit{font-size:10px;color:var(--dsw-alias-label-tertiary)}
         .twb-caption{font-size:11px;color:var(--dsw-alias-label-tertiary);line-height:1.5}
         .twb-caption[data-tone="error"]{color:var(--dsw-alias-state-error-primary)}
         .twb-caption[data-tone="ok"]{color:var(--dsw-alias-state-success-primary)}
@@ -1558,7 +1616,7 @@ window.__ModuleLoader__.load({
 
         /** One labelled slider row; the panel is mostly these, so they share a shape. */
         function sliderRow(options) {
-          const { label, hint, min, max, step, value, display, onChange } = options;
+          const { label, hint, min, max, step, value, display, onChange, field } = options;
           return h(
             "div",
             { className: "twb-row" },
@@ -1573,7 +1631,60 @@ window.__ModuleLoader__.load({
               "aria-label": label,
               onChange: (event) => onChange(Number(event.target.value))
             }),
-            h("span", { className: "twb-value" }, display)
+            field ?? h("span", { className: "twb-value" }, display)
+          );
+        }
+
+        /**
+         * Numbers typed into a value field; unit suffixes are tolerated, a half-typed
+         * "-" or an emptied box is not a number yet.
+         */
+        function parseNumber(raw) {
+          const cleaned = String(raw ?? "").replace(/[^\d.+-]/g, "");
+          if (cleaned === "") return null;
+          const parsed = Number(cleaned);
+          return Number.isFinite(parsed) ? parsed : null;
+        }
+
+        /**
+         * The editable value slot beside a slider.
+         *
+         * The slider stops at its own `max`; this field does not — it takes typed numbers
+         * up to `hardMax`, which is the settings' own ceiling. It commits while typing, so
+         * a value is never "typed but not applied", and text that is not a number yet is
+         * simply ignored instead of being written as a broken setting.
+         */
+        function numberField(options) {
+          const { label, value, min, hardMax, unit, format, parse, onChange } = options;
+          const [draft, setDraft] = useState(null);
+          const commit = (raw) => {
+            const parsed = parse(raw);
+            if (parsed === null) return;
+            onChange(Math.min(hardMax, Math.max(min, parsed)));
+          };
+          return h(
+            "span",
+            { className: "twb-field" },
+            h("input", {
+              className: "twb-number",
+              type: "text",
+              inputMode: "decimal",
+              value: draft ?? format(value),
+              "aria-label": label,
+              title: `${label}：可以直接输入数值（最大 ${hardMax}${unit}）`,
+              onChange: (event) => {
+                const raw = event.target.value;
+                setDraft(raw);
+                commit(raw);
+              },
+              // Leaving the field drops half-typed text: the box always shows the value
+              // that is actually in effect.
+              onBlur: () => setDraft(null),
+              onKeyDown: (event) => {
+                if (event.key === "Enter") setDraft(null);
+              }
+            }),
+            h("span", { className: "twb-unit" }, unit)
           );
         }
 
@@ -2059,13 +2170,44 @@ window.__ModuleLoader__.load({
               }),
               sliderRow({
                 label: "随机音高",
-                hint: "每个音随机偏移多少半音，让声音更自然",
+                hint: `每个字随机偏移多少半音，让声音更自然；自定义音频靠变速实现。滑条到 ${JITTER_SLIDER_MAX}，右边的框可以直接填更大（上限 ${JITTER_MAX}）`,
                 min: 0,
-                max: 2,
+                max: JITTER_SLIDER_MAX,
                 step: 0.05,
                 value: settings.jitter,
-                display: `${settings.jitter.toFixed(2)} st`,
-                onChange: (jitter) => update({ jitter })
+                onChange: (jitter) => update({ jitter }),
+                field: numberField({
+                  label: "随机音高",
+                  value: settings.jitter,
+                  min: 0,
+                  hardMax: JITTER_MAX,
+                  unit: "st",
+                  format: (semitones) => semitones.toFixed(2),
+                  parse: parseNumber,
+                  onChange: (jitter) => update({ jitter })
+                })
+              }),
+              sliderRow({
+                label: "随机音量",
+                hint: `每个字随机改变多少音量，让声音更自然。滑条到 ±${Math.round(VOLUME_JITTER_SLIDER_MAX * 100)}%，右边的框可以直接填更大（上限 ±100%）`,
+                min: 0,
+                max: VOLUME_JITTER_SLIDER_MAX,
+                step: 0.05,
+                value: settings.volumeJitter,
+                onChange: (volumeJitter) => update({ volumeJitter }),
+                field: numberField({
+                  label: "随机音量",
+                  value: settings.volumeJitter,
+                  min: 0,
+                  hardMax: VOLUME_JITTER_MAX,
+                  unit: "%",
+                  format: (share) => String(Math.round(share * 100)),
+                  parse: (raw) => {
+                    const percent = parseNumber(raw);
+                    return percent === null ? null : percent / 100;
+                  },
+                  onChange: (volumeJitter) => update({ volumeJitter })
+                })
               })
             ),
             notice !== null ? h("div", { className: "twb-caption", "data-tone": notice.tone }, notice.text) : null,

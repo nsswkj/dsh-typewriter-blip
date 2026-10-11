@@ -436,7 +436,7 @@ ok(modules.audio !== null, "audio module loaded from the bundle");
 ok(modules.observer !== null, "observer module loaded from the bundle");
 ok(modules.client !== null, "client module loaded from the bundle");
 
-const { SettingsStore, DEFAULTS, normalizeSettings, STORAGE_KEY } = modules.settings;
+const { SettingsStore, DEFAULTS, normalizeSettings, STORAGE_KEY, JITTER_MAX } = modules.settings;
 const voices = modules.voices;
 const { BlipAudio, specFor } = modules.audio;
 const { BlipDriver, ChatTextObserver, countFlowText, countFlowCharacters, collectCharacters, MAX_PENDING, MAX_QUEUE, MAX_LEAD, PLAYOUT_MS } = modules.observer;
@@ -468,6 +468,14 @@ eq(normalizeSettings({ custom: "nope" }).custom.source, "synth", "a corrupt cust
 eq(normalizeSettings({ tail: 5000 }).tail, 800, "the tail window clamps");
 eq(normalizeSettings(undefined).answerOnly, true, "answers only, by default");
 eq(normalizeSettings({ answerOnly: "no" }).answerOnly, true, "non-boolean answerOnly falls back");
+
+// "另外请添加一个随机音量 并且让两个可以输入数值 突破滑动数值的上限": the sliders stop at
+// 2 st / ±50% on purpose, while the stored values may go as far as these ceilings.
+eq(DEFAULTS.volumeJitter, 0, "随机音量 starts switched off");
+eq(normalizeSettings({ volumeJitter: 0.35 }).volumeJitter, 0.35, "a stored 随机音量 survives");
+eq(normalizeSettings({ volumeJitter: 9 }).volumeJitter, 1, "随机音量 stops at ±100%");
+eq(normalizeSettings({ jitter: 6 }).jitter, 6, "随机音高 accepts more than its slider offers");
+eq(normalizeSettings({ jitter: 999 }).jitter, JITTER_MAX, "随机音高 stops at its ceiling");
 
 const store = new SettingsStore(storage);
 let notifications = 0;
@@ -590,6 +598,82 @@ ok(sampleReady, "sample data URL decodes");
 audioSettings = { ...DEFAULTS, preset: "custom", custom: { ...DEFAULTS.custom, source: "sample" } };
 eq(audio.play("a"), true, "the custom file voice plays once the sample is decoded");
 eq(await audio.loadSample(""), false, "clearing the sample disables the custom voice");
+
+/* ------------------------------------------------------ 随机音高 / 随机音量 */
+
+console.log("\n随机音高与随机音量");
+
+// Math.random is pinned for these: an assertion can only name an expected playback
+// rate or peak if the jitter is knowable, and ±1 is the top of the row's range.
+class RandomContext extends FakeContext {
+  constructor() {
+    super();
+    this.sources = [];
+    this.gains = [];
+  }
+  createGain() {
+    const gain = super.createGain();
+    this.gains.push(gain);
+    return gain;
+  }
+  createBufferSource() {
+    const source = super.createBufferSource();
+    this.sources.push(source);
+    return source;
+  }
+}
+
+const randomContext = new RandomContext();
+let randomSettings = { ...DEFAULTS };
+const randomAudio = new BlipAudio({
+  createContext: () => randomContext,
+  getSettings: () => randomSettings,
+  logger: { warn: () => {} }
+});
+/** The attack ramp of a blip's own gain node — the level it actually sounds at. */
+const peakOf = (gain) => gain.gain.events.find((event) => event.kind === "linear")?.value;
+const realRandom = Math.random;
+await randomAudio.loadSample("data:audio/wav;base64,AAAA");
+
+// "随机音高对于自定义音频没用": a decoded file cannot be re-tuned, so the same semitone
+// offset has to arrive as a playback rate. +12 semitones is one octave, i.e. 2x.
+const sampleVoice = { preset: "custom", custom: { ...DEFAULTS.custom, source: "sample" } };
+randomSettings = { ...DEFAULTS, ...sampleVoice, jitter: 0, rate: 1 };
+eq(randomAudio.play("a"), true, "the sample voice plays with no jitter at all");
+eq(randomContext.sources.at(-1).playbackRate.value, 1, "without 随机音高 a sample keeps its own rate");
+const plainLength = randomAudio.blipSeconds();
+randomSettings = { ...DEFAULTS, ...sampleVoice, jitter: 12, rate: 1 };
+Math.random = () => 1;
+randomAudio.play("a");
+Math.random = realRandom;
+// An octave up is 2x, and a semitone is a power of two — hence the tolerance.
+const pitchedRate = randomContext.sources.at(-1).playbackRate.value;
+ok(
+  pitchedRate > 1.99 && pitchedRate < 2.01,
+  "随机音高 resamples the custom file by the offset",
+  String(pitchedRate)
+);
+ok(
+  randomAudio.blipSeconds() >= plainLength,
+  "试听 assumes the slowest blip the jitter can hand it",
+  String(randomAudio.blipSeconds())
+);
+
+// "另外请添加一个随机音量": the randomness rides on the blip's own gain, so the master
+// volume is untouched and one loud character cannot lift the whole answer.
+randomSettings = { ...DEFAULTS, preset: "soft", volumeJitter: 0 };
+randomAudio.play("a");
+eq(peakOf(randomContext.gains.at(-1)), 0.5, "with 随机音量 off a synth blip keeps its peak");
+Math.random = () => 1;
+randomSettings = { ...DEFAULTS, preset: "soft", volumeJitter: 0.5 };
+randomAudio.play("a");
+Math.random = realRandom;
+eq(peakOf(randomContext.gains.at(-1)), 0.75, "随机音量 scales a synth blip up");
+Math.random = () => 0;
+randomSettings = { ...DEFAULTS, ...sampleVoice, volumeJitter: 0.5 };
+randomAudio.play("a");
+Math.random = realRandom;
+eq(peakOf(randomContext.gains.at(-1)), 0.5, "随机音量 scales a sample blip down");
 
 /* ----------------------------------------------------------------------- cut */
 
@@ -1364,6 +1448,7 @@ ok(panelText.includes("基频") && panelText.includes("音长"), "the custom syn
 ok(panelText.includes("音频文件"), "the custom voice can also use a file");
 ok(panelText.includes("说完即停"), "the panel exposes the tail control");
 ok(panelText.includes("只对回答发声"), "the panel exposes the answer-only switch");
+ok(panelText.includes("随机音量"), "the panel exposes the random volume row");
 ok(panelText.includes("试听") && panelText.includes("恢复默认"), "the panel keeps its preview and reset actions");
 
 // "点击试听后必须听完才可以点击下一次": the preview button is locked by state, and its
@@ -1380,6 +1465,35 @@ ok((previewButton?.props?.children ?? "") === runtime.previewLabel?.(false), "th
 eq(runtime.store.get().custom.source, "synth", "the panel opens on the synth custom voice");
 eq(runtime.store.get().answerOnly, true, "the dock starts with answers only");
 eq(runtime.store.get().tail, 140, "the dock starts with the tight 说完即停 window");
+
+// "让两个可以输入数值 突破滑动数值的上限": each random row carries a number field beside
+// its slider, and what is typed there is what gets stored — the slider's max is not the
+// ceiling, the settings' own clamp is.
+const numberFields = [];
+(function collect(node) {
+  if (node === null || node === undefined || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (const child of node) collect(child);
+    return;
+  }
+  if (node.props?.className === "twb-number") numberFields.push(node);
+  collect(node.props?.children ?? null);
+})(panelElement);
+eq(numberFields.length, 2, "both random rows take typed numbers");
+eq(numberFields[0]?.props?.value, DEFAULTS.jitter.toFixed(2), "随机音高 shows the stored value");
+eq(numberFields[1]?.props?.value, "0", "随机音量 shows its share as a percentage");
+const typeField = (field, text) => field.props.onChange({ target: { value: text } });
+typeField(numberFields[0], "6");
+eq(runtime.store.get().jitter, 6, "a typed 随机音高 passes the slider's 2");
+typeField(numberFields[1], "80");
+eq(runtime.store.get().volumeJitter, 0.8, "a typed 随机音量 passes the slider's 50%");
+typeField(numberFields[1], "500");
+eq(runtime.store.get().volumeJitter, 1, "a typed value still stops at the ceiling");
+typeField(numberFields[0], "");
+eq(runtime.store.get().jitter, 6, "an emptied field writes nothing");
+// The sections below drive the same store, so the settings go back to what they were.
+runtime.store.set({ jitter: DEFAULTS.jitter, volumeJitter: DEFAULTS.volumeJitter });
+eq(runtime.store.get().jitter, DEFAULTS.jitter, "the panel's own settings were restored");
 
 /* ------------------------------------------- the panel opens above the button */
 

@@ -5,7 +5,7 @@ const { useState, useEffect, useRef, useCallback } = React;
 // static position (beside the button) for a frame before it jumps into place.
 const usePlacement = React.useLayoutEffect ?? React.useEffect;
 
-const { SettingsStore } = settings;
+const { SettingsStore, JITTER_MAX, VOLUME_JITTER_MAX } = settings;
 const { PRESETS, PRESET_ORDER, CUSTOM_WAVES } = voices;
 const { BlipAudio } = audio;
 const { BlipDriver, ChatTextObserver } = observer;
@@ -57,6 +57,15 @@ const GUARD_STARVED_MS = 400;
  * from stuttering.
  */
 const BACKGROUND_LEAD_SECONDS = 1.4;
+/**
+ * Where the two random rows' sliders stop.
+ *
+ * The slider is for nudging a value; the number field next to it takes anything up
+ * to the settings' own ceiling (`JITTER_MAX` / `VOLUME_JITTER_MAX`), which is the
+ * reason both exist on the same row.
+ */
+const JITTER_SLIDER_MAX = 2;
+const VOLUME_JITTER_SLIDER_MAX = 0.5;
 
 const CSS = `
 .twb-root{position:relative;display:inline-flex;align-items:center}
@@ -86,6 +95,11 @@ const CSS = `
 .twb-row-label{font-size:12px;color:var(--dsw-alias-label-secondary);flex:1}
 .twb-row-label[title]{cursor:help}
 .twb-value{font-size:11px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;min-width:40px;text-align:right}
+.twb-field{display:inline-flex;align-items:center;gap:2px;flex:none}
+.twb-number{width:42px;height:20px;box-sizing:border-box;padding:0 3px;border:0.5px solid var(--dsw-alias-border-l2);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;line-height:1;text-align:right;font-variant-numeric:tabular-nums}
+.twb-number:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.twb-number:focus{outline:none;border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}
+.twb-unit{font-size:10px;color:var(--dsw-alias-label-tertiary)}
 .twb-caption{font-size:11px;color:var(--dsw-alias-label-tertiary);line-height:1.5}
 .twb-caption[data-tone="error"]{color:var(--dsw-alias-state-error-primary)}
 .twb-caption[data-tone="ok"]{color:var(--dsw-alias-state-success-primary)}
@@ -150,7 +164,7 @@ function readAsDataUrl(file) {
 
 /** One labelled slider row; the panel is mostly these, so they share a shape. */
 function sliderRow(options) {
-  const { label, hint, min, max, step, value, display, onChange } = options;
+  const { label, hint, min, max, step, value, display, onChange, field } = options;
   return h(
     "div",
     { className: "twb-row" },
@@ -165,7 +179,60 @@ function sliderRow(options) {
       "aria-label": label,
       onChange: (event) => onChange(Number(event.target.value))
     }),
-    h("span", { className: "twb-value" }, display)
+    field ?? h("span", { className: "twb-value" }, display)
+  );
+}
+
+/**
+ * Numbers typed into a value field; unit suffixes are tolerated, a half-typed
+ * "-" or an emptied box is not a number yet.
+ */
+function parseNumber(raw) {
+  const cleaned = String(raw ?? "").replace(/[^\d.+-]/g, "");
+  if (cleaned === "") return null;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * The editable value slot beside a slider.
+ *
+ * The slider stops at its own `max`; this field does not — it takes typed numbers
+ * up to `hardMax`, which is the settings' own ceiling. It commits while typing, so
+ * a value is never "typed but not applied", and text that is not a number yet is
+ * simply ignored instead of being written as a broken setting.
+ */
+function numberField(options) {
+  const { label, value, min, hardMax, unit, format, parse, onChange } = options;
+  const [draft, setDraft] = useState(null);
+  const commit = (raw) => {
+    const parsed = parse(raw);
+    if (parsed === null) return;
+    onChange(Math.min(hardMax, Math.max(min, parsed)));
+  };
+  return h(
+    "span",
+    { className: "twb-field" },
+    h("input", {
+      className: "twb-number",
+      type: "text",
+      inputMode: "decimal",
+      value: draft ?? format(value),
+      "aria-label": label,
+      title: `${label}：可以直接输入数值（最大 ${hardMax}${unit}）`,
+      onChange: (event) => {
+        const raw = event.target.value;
+        setDraft(raw);
+        commit(raw);
+      },
+      // Leaving the field drops half-typed text: the box always shows the value
+      // that is actually in effect.
+      onBlur: () => setDraft(null),
+      onKeyDown: (event) => {
+        if (event.key === "Enter") setDraft(null);
+      }
+    }),
+    h("span", { className: "twb-unit" }, unit)
   );
 }
 
@@ -651,13 +718,44 @@ function Panel(props) {
       }),
       sliderRow({
         label: "随机音高",
-        hint: "每个音随机偏移多少半音，让声音更自然",
+        hint: `每个字随机偏移多少半音，让声音更自然；自定义音频靠变速实现。滑条到 ${JITTER_SLIDER_MAX}，右边的框可以直接填更大（上限 ${JITTER_MAX}）`,
         min: 0,
-        max: 2,
+        max: JITTER_SLIDER_MAX,
         step: 0.05,
         value: settings.jitter,
-        display: `${settings.jitter.toFixed(2)} st`,
-        onChange: (jitter) => update({ jitter })
+        onChange: (jitter) => update({ jitter }),
+        field: numberField({
+          label: "随机音高",
+          value: settings.jitter,
+          min: 0,
+          hardMax: JITTER_MAX,
+          unit: "st",
+          format: (semitones) => semitones.toFixed(2),
+          parse: parseNumber,
+          onChange: (jitter) => update({ jitter })
+        })
+      }),
+      sliderRow({
+        label: "随机音量",
+        hint: `每个字随机改变多少音量，让声音更自然。滑条到 ±${Math.round(VOLUME_JITTER_SLIDER_MAX * 100)}%，右边的框可以直接填更大（上限 ±100%）`,
+        min: 0,
+        max: VOLUME_JITTER_SLIDER_MAX,
+        step: 0.05,
+        value: settings.volumeJitter,
+        onChange: (volumeJitter) => update({ volumeJitter }),
+        field: numberField({
+          label: "随机音量",
+          value: settings.volumeJitter,
+          min: 0,
+          hardMax: VOLUME_JITTER_MAX,
+          unit: "%",
+          format: (share) => String(Math.round(share * 100)),
+          parse: (raw) => {
+            const percent = parseNumber(raw);
+            return percent === null ? null : percent / 100;
+          },
+          onChange: (volumeJitter) => update({ volumeJitter })
+        })
       })
     ),
     notice !== null ? h("div", { className: "twb-caption", "data-tone": notice.tone }, notice.text) : null,

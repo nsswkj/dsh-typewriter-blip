@@ -1,6 +1,6 @@
 {
   "name": "dsh-typewriter-blip",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "type": "module",
   "description": "Speech blips while the assistant answer streams — audible even when the window is in the background — with swappable and custom voices.",
   "meta": {
